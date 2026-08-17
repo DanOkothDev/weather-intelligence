@@ -60,6 +60,29 @@ COLUMN_ALIASES = {
         "solar_energy",
         "radiation",
     ],
+    "uv_index": [
+        "uv_index",
+        "uv",
+        "uvi",
+        "ultraviolet_index",
+    ],
+    "cloud_cover": [
+        "cloud_cover",
+        "cloudiness",
+        "cloud_cover_percent",
+        "cloud_percentage",
+    ],
+    "visibility": [
+        "visibility",
+        "visibility_km",
+        "vis",
+    ],
+    "dew_point": [
+        "dew_point",
+        "dewpoint",
+        "dew_point_temperature",
+        "dewpoint_temperature",
+    ],
 }
 
 
@@ -133,9 +156,6 @@ def normalize_weather_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_weather_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Perform basic cleaning and type conversion.
-    """
 
     df = normalize_weather_schema(df)
 
@@ -153,8 +173,11 @@ def clean_weather_data(df: pd.DataFrame) -> pd.DataFrame:
         "rainfall",
         "pressure",
         "wind_speed",
-        "wind_direction",
         "solar_radiation",
+        "uv_index",
+        "cloud_cover",
+        "visibility",
+        "dew_point",
     ]
 
     for column in numeric_columns:
@@ -163,6 +186,51 @@ def clean_weather_data(df: pd.DataFrame) -> pd.DataFrame:
                 df[column],
                 errors="coerce",
             )
+
+    if "wind_direction" in df.columns:
+
+        direction_map = {
+            "N": 0,
+            "NNE": 22.5,
+            "NE": 45,
+            "ENE": 67.5,
+            "E": 90,
+            "ESE": 112.5,
+            "SE": 135,
+            "SSE": 157.5,
+            "S": 180,
+            "SSW": 202.5,
+            "SW": 225,
+            "WSW": 247.5,
+            "W": 270,
+            "WNW": 292.5,
+            "NW": 315,
+            "NNW": 337.5,
+        }
+
+        def convert_wind_direction(value):
+            if pd.isna(value):
+                return None
+
+            # Already numeric
+            if isinstance(value, (int, float)):
+                return float(value)
+
+            value = str(value).strip().upper()
+
+            # Cardinal/intercardinal direction
+            if value in direction_map:
+                return direction_map[value]
+
+            # Numeric string such as "135"
+            try:
+                return float(value)
+            except ValueError:
+                return None
+
+        df["wind_direction"] = df["wind_direction"].apply(
+            convert_wind_direction
+        )
 
     # Remove completely empty rows
     df = df.dropna(how="all")

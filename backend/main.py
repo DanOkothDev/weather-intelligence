@@ -14,6 +14,7 @@ from backend.quality import generate_quality_report
 from backend.analysis import generate_analysis
 from backend.anomaly import generate_anomaly_report
 from backend.impact import generate_impact_insights
+from backend.prediction import PredictionError, generate_prediction_report
 
 app = FastAPI(
     title="Weather Intelligence API",
@@ -65,9 +66,19 @@ async def upload_dataset(file: UploadFile = File(...)):
             analysis,
             anomaly_report,
         )
+        try:
+            prediction_report = generate_prediction_report(
+                df,
+                horizon=5,
+            )
+        except PredictionError as exc:
+            prediction_report = {
+                "status": "unavailable",
+                "message": str(exc),
+            }
 
         return {
-            "message": "Dataset ingested, cleaned, quality-checked, and analyzed successfully.",
+            "message": "Dataset ingested, cleaned, quality-checked, analyzed, and predicted successfully.",
             "filename": file.filename,
             "raw_metadata": raw_metadata,
             "cleaned_metadata": cleaned_metadata,
@@ -75,6 +86,7 @@ async def upload_dataset(file: UploadFile = File(...)):
             "analysis": analysis,
             "anomaly_report": anomaly_report,
             "impact_insights": impact_insights,
+            "prediction": prediction_report,
         }
 
     except IngestionError as exc:
