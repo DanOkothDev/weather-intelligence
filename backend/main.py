@@ -56,8 +56,7 @@ async def upload_dataset(file: UploadFile = File(...)):
 
         raw_metadata = get_dataset_metadata(df)
 
-        df = clean_weather_data(df)
-
+        df, cleaning_report = clean_weather_data(df)
         cleaned_metadata = get_dataset_metadata(df)
         quality_report = generate_quality_report(df)
         analysis = generate_analysis(df)
@@ -81,12 +80,13 @@ async def upload_dataset(file: UploadFile = File(...)):
             "message": "Dataset ingested, cleaned, quality-checked, analyzed, and predicted successfully.",
             "filename": file.filename,
             "raw_metadata": raw_metadata,
+            "cleaning_report": cleaning_report,
             "cleaned_metadata": cleaned_metadata,
             "quality_report": quality_report,
             "analysis": analysis,
             "anomaly_report": anomaly_report,
             "impact_insights": impact_insights,
-            "prediction": prediction_report,
+            "prediction_report": prediction_report,
         }
 
     except IngestionError as exc:

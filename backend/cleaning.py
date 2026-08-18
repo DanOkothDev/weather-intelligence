@@ -86,10 +86,43 @@ COLUMN_ALIASES = {
 }
 
 
+# Columns that should contain numerical values
+NUMERIC_COLUMNS = [
+    "temperature",
+    "humidity",
+    "rainfall",
+    "pressure",
+    "wind_speed",
+    "solar_radiation",
+    "uv_index",
+    "cloud_cover",
+    "visibility",
+    "dew_point",
+]
+
+
+# Compass direction -> degrees
+WIND_DIRECTION_MAP = {
+    "N": 0.0,
+    "NNE": 22.5,
+    "NE": 45.0,
+    "ENE": 67.5,
+    "E": 90.0,
+    "ESE": 112.5,
+    "SE": 135.0,
+    "SSE": 157.5,
+    "S": 180.0,
+    "SSW": 202.5,
+    "SW": 225.0,
+    "WSW": 247.5,
+    "W": 270.0,
+    "WNW": 292.5,
+    "NW": 315.0,
+    "NNW": 337.5,
+}
+
+
 def normalize_column_name(column: str) -> str:
-    """
-    Convert a column name into a predictable comparison format.
-    """
 
     column = str(column).strip().lower()
 
@@ -103,16 +136,6 @@ def normalize_column_name(column: str) -> str:
 
 
 def detect_weather_columns(df: pd.DataFrame) -> dict:
-    """
-    Match dataset columns against known weather-field aliases.
-
-    Returns:
-        {
-            "temperature": "Temp",
-            "humidity": "RH",
-            ...
-        }
-    """
 
     normalized_columns = {
         normalize_column_name(column): column
@@ -129,6 +152,7 @@ def detect_weather_columns(df: pd.DataFrame) -> dict:
         }
 
         for normalized_alias in normalized_aliases:
+
             if normalized_alias in normalized_columns:
                 detected[canonical_name] = normalized_columns[
                     normalized_alias
@@ -138,104 +162,248 @@ def detect_weather_columns(df: pd.DataFrame) -> dict:
     return detected
 
 
-def normalize_weather_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Rename detected weather columns to canonical names.
-    """
+def normalize_weather_schema(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     detected = detect_weather_columns(df)
 
     rename_map = {
         original: canonical
         for canonical, original in detected.items()
+        if original != canonical
     }
 
-    normalized_df = df.rename(columns=rename_map).copy()
+    normalized_df = df.rename(
+        columns=rename_map
+    ).copy()
 
-    return normalized_df
+    return normalized_df, rename_map
 
 
-def clean_weather_data(df: pd.DataFrame) -> pd.DataFrame:
+def convert_numeric_column(
+    df: pd.DataFrame,
+    column: str,
+) -> dict:
 
-    df = normalize_weather_schema(df)
+    if column not in df.columns:
+        return {
+            "original_non_null": 0,
+            "converted_non_null": 0,
+            "invalid_values": 0,
+        }
 
-    # Convert timestamp when available
+    original = df[column]
+
+    original_non_null = int(original.notna().sum())
+
+    converted = pd.to_numeric(
+        original,
+        errors="coerce",
+    )
+
+    converted_non_null = int(converted.notna().sum())
+
+    invalid_values = max(
+        original_non_null - converted_non_null,
+        0,
+    )
+
+    df[column] = converted
+
+    return {
+        "original_non_null": original_non_null,
+        "converted_non_null": converted_non_null,
+        "invalid_values": invalid_values,
+    }
+
+
+def convert_wind_direction(value):
+
+    if pd.isna(value):
+        return None
+
+    # Already numeric
+    if isinstance(value, (int, float)):
+        direction = float(value)
+
+    else:
+        value = str(value).strip().upper()
+
+        # Compass/intercardinal direction
+        if value in WIND_DIRECTION_MAP:
+            return WIND_DIRECTION_MAP[value]
+
+        # Numeric string
+        try:
+            direction = float(value)
+        except ValueError:
+            return None
+
+    # Valid compass bearing
+    if 0 <= direction <= 360:
+        return direction
+
+    return None
+
+
+def convert_wind_direction_column(
+    df: pd.DataFrame,
+) -> dict:
+
+    if "wind_direction" not in df.columns:
+        return {
+            "original_non_null": 0,
+            "converted_non_null": 0,
+            "invalid_values": 0,
+        }
+
+    original = df["wind_direction"]
+
+    original_non_null = int(
+        original.notna().sum()
+    )
+
+    converted = original.apply(
+        convert_wind_direction
+    )
+
+    converted_non_null = int(
+        converted.notna().sum()
+    )
+
+    invalid_values = max(
+        original_non_null - converted_non_null,
+        0,
+    )
+
+    df["wind_direction"] = converted
+
+    return {
+        "original_non_null": original_non_null,
+        "converted_non_null": converted_non_null,
+        "invalid_values": invalid_values,
+    }
+
+
+def clean_weather_data(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict]:
+
+    # Work on a copy so the caller's DataFrame is not modified.
+    df = df.copy()
+
+    original_rows = len(df)
+    original_columns = list(df.columns)
+
+
+    df, rename_map = normalize_weather_schema(df)
+
+    timestamp_report = {
+        "present": False,
+        "original_non_null": 0,
+        "converted_non_null": 0,
+        "invalid_values": 0,
+    }
+
     if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(
-            df["timestamp"],
+
+        timestamp_report["present"] = True
+
+        original_timestamp = df["timestamp"]
+
+        original_non_null = int(
+            original_timestamp.notna().sum()
+        )
+
+        converted_timestamp = pd.to_datetime(
+            original_timestamp,
             errors="coerce",
         )
 
-    # Convert numerical weather measurements
-    numeric_columns = [
-        "temperature",
-        "humidity",
-        "rainfall",
-        "pressure",
-        "wind_speed",
-        "solar_radiation",
-        "uv_index",
-        "cloud_cover",
-        "visibility",
-        "dew_point",
-    ]
-
-    for column in numeric_columns:
-        if column in df.columns:
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce",
-            )
-
-    if "wind_direction" in df.columns:
-
-        direction_map = {
-            "N": 0,
-            "NNE": 22.5,
-            "NE": 45,
-            "ENE": 67.5,
-            "E": 90,
-            "ESE": 112.5,
-            "SE": 135,
-            "SSE": 157.5,
-            "S": 180,
-            "SSW": 202.5,
-            "SW": 225,
-            "WSW": 247.5,
-            "W": 270,
-            "WNW": 292.5,
-            "NW": 315,
-            "NNW": 337.5,
-        }
-
-        def convert_wind_direction(value):
-            if pd.isna(value):
-                return None
-
-            # Already numeric
-            if isinstance(value, (int, float)):
-                return float(value)
-
-            value = str(value).strip().upper()
-
-            # Cardinal/intercardinal direction
-            if value in direction_map:
-                return direction_map[value]
-
-            # Numeric string such as "135"
-            try:
-                return float(value)
-            except ValueError:
-                return None
-
-        df["wind_direction"] = df["wind_direction"].apply(
-            convert_wind_direction
+        converted_non_null = int(
+            converted_timestamp.notna().sum()
         )
 
-    # Remove completely empty rows
-    df = df.dropna(how="all")
+        invalid_values = max(
+            original_non_null - converted_non_null,
+            0,
+        )
 
-    # Remove duplicate measurements
+        df["timestamp"] = converted_timestamp
+
+        timestamp_report.update(
+            {
+                "original_non_null": original_non_null,
+                "converted_non_null": converted_non_null,
+                "invalid_values": invalid_values,
+            }
+        )
+
+
+    numeric_conversion_report = {}
+
+    for column in NUMERIC_COLUMNS:
+
+        if column not in df.columns:
+            continue
+
+        numeric_conversion_report[column] = (
+            convert_numeric_column(
+                df,
+                column,
+            )
+        )
+
+
+    wind_direction_report = (
+        convert_wind_direction_column(df)
+    )
+
+
+    rows_before_empty_removal = len(df)
+
+    df = df.dropna(
+        how="all"
+    )
+
+    empty_rows_removed = (
+        rows_before_empty_removal - len(df)
+    )
+
+
+    rows_before_duplicate_removal = len(df)
+
     df = df.drop_duplicates()
 
-    return df
+    duplicate_rows_removed = (
+        rows_before_duplicate_removal - len(df)
+    )
+
+
+    cleaning_report = {
+        "original_shape": {
+            "rows": original_rows,
+            "columns": len(original_columns),
+        },
+        "final_shape": {
+            "rows": len(df),
+            "columns": len(df.columns),
+        },
+        "columns": {
+            "original": original_columns,
+            "final": list(df.columns),
+            "renamed": rename_map,
+        },
+        "timestamp_conversion": timestamp_report,
+        "numeric_conversions": numeric_conversion_report,
+        "wind_direction_conversion": wind_direction_report,
+        "rows_removed": {
+            "empty_rows": empty_rows_removed,
+            "duplicate_rows": duplicate_rows_removed,
+            "total": (
+                empty_rows_removed
+                + duplicate_rows_removed
+            ),
+        },
+    }
+
+    return df, cleaning_report

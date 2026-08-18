@@ -1,22 +1,39 @@
-import pandas as pd
+from pathlib import Path
 
+from backend.ingestion import load_dataset
+from backend.cleaning import clean_weather_data
 from backend.analysis import generate_analysis
 
 
-df = pd.DataFrame({
-    "timestamp": pd.to_datetime([
-        "2026-08-16 10:00",
-        "2026-08-16 11:00",
-        "2026-08-16 12:00",
-        "2026-08-16 13:00",
-    ]),
-    "temperature": [24.5, 25.1, 26.3, 25.8],
-    "humidity": [68, 65, 62, 70],
-    "rainfall": [0.0, 0.0, 1.2, 3.4],
-})
+def main():
+    dataset_path = Path("data/uploads/weather_mock_data.csv")
+
+    # Load dataset
+    df = load_dataset(str(dataset_path))
+
+    print("\nRAW DATA")
+    print(df.head())
+    print(f"\nRows: {len(df)}")
+    print(f"Columns: {len(df.columns)}")
+
+    # Clean dataset
+    df, cleaning_report = clean_weather_data(df)
+
+    print("\nCLEANING REPORT")
+    print(cleaning_report)
+
+    print("\nCLEANED DATA")
+    print(df.head())
+
+    print("\nCLEANED DATA TYPES")
+    print(df.dtypes)
+
+    # Analyze dataset
+    result = generate_analysis(df)
+
+    print("\nWEATHER ANALYSIS")
+    print(result)
 
 
-result = generate_analysis(df)
-
-print("\nWEATHER ANALYSIS")
-print(result)
+if __name__ == "__main__":
+    main()
