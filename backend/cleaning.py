@@ -28,6 +28,7 @@ COLUMN_ALIASES = {
         "rh",
         "humidity_percent",
         "relative_humidity_percent",
+        "humidity_pct",
     ],
     "rainfall": [
         "rainfall",
@@ -36,52 +37,64 @@ COLUMN_ALIASES = {
         "precip",
         "rainfall_mm",
         "rain_mm",
+        "precipitation_mm",
     ],
     "pressure": [
         "pressure",
         "air_pressure",
         "atmospheric_pressure",
         "pressure_hpa",
+        "pressure_hpa_value",
     ],
     "wind_speed": [
         "wind_speed",
         "windspeed",
         "wind_velocity",
         "wind_speed_ms",
+        "wind_speed_kmh",
     ],
     "wind_direction": [
         "wind_direction",
         "wind_dir",
         "wind_direction_deg",
+        "wind_direction_degrees",
+        "direction",
     ],
     "solar_radiation": [
         "solar_radiation",
         "solar",
         "solar_energy",
         "radiation",
+        "solar_radiation_wm2",
     ],
     "uv_index": [
         "uv_index",
         "uv",
         "uvi",
         "ultraviolet_index",
+        "uv_level",
+        "uv_index_value",
     ],
     "cloud_cover": [
         "cloud_cover",
         "cloudiness",
         "cloud_cover_percent",
         "cloud_percentage",
+        "cloud_cover_pct",
+        "cloudiness_percent",
     ],
     "visibility": [
         "visibility",
         "visibility_km",
         "vis",
+        "visibility_kilometers",
     ],
     "dew_point": [
         "dew_point",
         "dewpoint",
         "dew_point_temperature",
         "dewpoint_temperature",
+        "dew_temperature",
     ],
 }
 
@@ -294,90 +307,79 @@ def clean_weather_data(
     original_rows = len(df)
     original_columns = list(df.columns)
 
-
     df, rename_map = normalize_weather_schema(df)
+
+    required_fields = {
+        "timestamp": {
+            "required": True,
+            "present": "timestamp" in df.columns,
+            "status": "ok" if "timestamp" in df.columns else "missing",
+        }
+    }
 
     timestamp_report = {
         "present": False,
         "original_non_null": 0,
         "converted_non_null": 0,
         "invalid_values": 0,
+        "invalid_rows": 0,
     }
 
     if "timestamp" in df.columns:
-
         timestamp_report["present"] = True
 
         original_timestamp = df["timestamp"]
-
-        original_non_null = int(
-            original_timestamp.notna().sum()
-        )
+        original_non_null = int(original_timestamp.notna().sum())
 
         converted_timestamp = pd.to_datetime(
             original_timestamp,
             errors="coerce",
         )
-
-        converted_non_null = int(
-            converted_timestamp.notna().sum()
-        )
-
-        invalid_values = max(
-            original_non_null - converted_non_null,
-            0,
-        )
+        converted_non_null = int(converted_timestamp.notna().sum())
+        invalid_values = max(original_non_null - converted_non_null, 0)
 
         df["timestamp"] = converted_timestamp
-
         timestamp_report.update(
             {
                 "original_non_null": original_non_null,
                 "converted_non_null": converted_non_null,
                 "invalid_values": invalid_values,
+                "invalid_rows": int(df["timestamp"].isna().sum()),
             }
         )
 
+        if timestamp_report["invalid_rows"]:
+            df = df.loc[df["timestamp"].notna()].copy()
 
     numeric_conversion_report = {}
+    total_invalid_values = 0
 
     for column in NUMERIC_COLUMNS:
-
         if column not in df.columns:
             continue
 
-        numeric_conversion_report[column] = (
-            convert_numeric_column(
-                df,
-                column,
-            )
-        )
+        report = convert_numeric_column(df, column)
+        numeric_conversion_report[column] = report
+        total_invalid_values += int(report.get("invalid_values", 0))
 
-
-    wind_direction_report = (
-        convert_wind_direction_column(df)
-    )
-
+    wind_direction_report = convert_wind_direction_column(df)
+    total_invalid_values += int(wind_direction_report.get("invalid_values", 0))
+    total_invalid_values += int(timestamp_report.get("invalid_values", 0))
 
     rows_before_empty_removal = len(df)
-
-    df = df.dropna(
-        how="all"
-    )
-
-    empty_rows_removed = (
-        rows_before_empty_removal - len(df)
-    )
-
+    df = df.dropna(how="all")
+    empty_rows_removed = rows_before_empty_removal - len(df)
 
     rows_before_duplicate_removal = len(df)
-
     df = df.drop_duplicates()
+    duplicate_rows_removed = rows_before_duplicate_removal - len(df)
 
-    duplicate_rows_removed = (
-        rows_before_duplicate_removal - len(df)
+    invalid_timestamp_rows = int(timestamp_report.get("invalid_rows", 0))
+    total_rows_removed = (
+        invalid_timestamp_rows
+        + empty_rows_removed
+        + duplicate_rows_removed
     )
-
 
     cleaning_report = {
         "original_shape": {
@@ -393,16 +395,22 @@ def clean_weather_data(
             "final": list(df.columns),
             "renamed": rename_map,
         },
+        "required_fields": required_fields,
         "timestamp_conversion": timestamp_report,
         "numeric_conversions": numeric_conversion_report,
         "wind_direction_conversion": wind_direction_report,
         "rows_removed": {
+            "invalid_timestamp_rows": invalid_timestamp_rows,
             "empty_rows": empty_rows_removed,
             "duplicate_rows": duplicate_rows_removed,
-            "total": (
-                empty_rows_removed
-                + duplicate_rows_removed
-            ),
+            "total": total_rows_removed,
+        },
+        "summary": {
+            "invalid_values_found": total_invalid_values,
+            "rows_removed": total_rows_removed,
+            "duplicate_rows_removed": duplicate_rows_removed,
+            "invalid_timestamp_rows": invalid_timestamp_rows,
+            "numeric_columns_processed": list(numeric_conversion_report.keys()),
         },
     }
 

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 
@@ -9,7 +10,28 @@ NUMERIC_WEATHER_COLUMNS = [
     "wind_speed",
     "wind_direction",
     "solar_radiation",
+    "uv_index",
+    "cloud_cover",
+    "visibility",
+    "dew_point",
 ]
+
+
+def get_available_numeric_weather_columns(df: pd.DataFrame) -> list[str]:
+    """Return the weather columns present in the DataFrame that can be treated as numeric."""
+
+    available = []
+
+    for column in NUMERIC_WEATHER_COLUMNS:
+        if column not in df.columns:
+            continue
+
+        series = pd.to_numeric(df[column], errors="coerce")
+
+        if series.notna().any():
+            available.append(column)
+
+    return available
 
 
 def analyze_numeric_columns(df: pd.DataFrame) -> dict:
@@ -17,13 +39,31 @@ def analyze_numeric_columns(df: pd.DataFrame) -> dict:
 
     analysis = {}
 
-    for column in NUMERIC_WEATHER_COLUMNS:
-        if column not in df.columns:
-            continue
-
+    for column in get_available_numeric_weather_columns(df):
         series = pd.to_numeric(df[column], errors="coerce").dropna()
 
         if series.empty:
+            continue
+
+        if column == "wind_direction":
+            radians = np.deg2rad(series)
+            sin_component = float(np.sin(radians).mean())
+            cos_component = float(np.cos(radians).mean())
+            circular_mean = float(np.rad2deg(np.arctan2(sin_component, cos_component)) % 360)
+
+            analysis[column] = {
+                "count": int(series.count()),
+                "mean": round(circular_mean, 3),
+                "circular_mean": round(circular_mean, 3),
+                "sin_component": round(sin_component, 3),
+                "cos_component": round(cos_component, 3),
+                "median": round(float(series.median()), 3),
+                "minimum": round(float(series.min()), 3),
+                "maximum": round(float(series.max()), 3),
+                "standard_deviation": round(float(series.std()), 3)
+                if len(series) > 1
+                else 0.0,
+            }
             continue
 
         analysis[column] = {
@@ -66,11 +106,7 @@ def analyze_rainfall(df: pd.DataFrame) -> dict:
 def analyze_correlations(df: pd.DataFrame) -> dict:
     """Calculate correlations between available numeric weather variables."""
 
-    available_columns = [
-        column
-        for column in NUMERIC_WEATHER_COLUMNS
-        if column in df.columns
-    ]
+    available_columns = get_available_numeric_weather_columns(df)
 
     if len(available_columns) < 2:
         return {}
@@ -106,11 +142,7 @@ def analyze_trends(df: pd.DataFrame) -> dict:
 
     trends = {}
 
-    for column in NUMERIC_WEATHER_COLUMNS:
-
-        if column not in df.columns:
-            continue
-
+    for column in get_available_numeric_weather_columns(df):
         series = pd.to_numeric(
             df[column],
             errors="coerce",
