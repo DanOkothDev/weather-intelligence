@@ -78,43 +78,40 @@ def train_prediction_model(
 ):
     """
     Train a Random Forest regression model for one weather variable.
+    Validates dataset before training and returns detailed metrics.
     """
 
-    valid_data = df[[col for col in df.columns]].copy()
+    if "timestamp" not in df.columns:
+        return {
+            "status": "validation_error",
+            "message": "The 'timestamp' column is required for model training.",
+        }
 
-    valid_data = valid_data.dropna(
-        subset=["timestamp", target]
-    )
+    if target not in df.columns:
+        return {
+            "status": "validation_error",
+            "message": f"The target column '{target}' was not found in the dataset.",
+        }
+
+    valid_data = df[[col for col in df.columns]].copy()
+    valid_data = valid_data.dropna(subset=["timestamp", target])
 
     if len(valid_data) < 10:
         return {
             "status": "insufficient_data",
-            "message": (
-                "At least 10 valid records are required "
-                "for prediction."
-            ),
+            "message": "At least 10 valid records are required for prediction.",
             "records_available": len(valid_data)
         }
 
-    X, y, feature_columns = prepare_features(
-        valid_data,
-        target,
-        lags
-    )
+    X, y, feature_columns = prepare_features(valid_data, target, lags)
 
     if len(X) < 8:
         return {
             "status": "insufficient_data",
-            "message": (
-                "Not enough records remain after "
-                "creating lag features."
-            ),
+            "message": "Not enough records remain after creating lag features.",
             "records_available": len(X)
         }
 
-    # Time-aware split.
-    # The first 80% is training data.
-    # The final 20% is testing data.
     split_index = int(len(X) * 0.8)
 
     if split_index <= 0 or split_index >= len(X):
@@ -124,7 +121,6 @@ def train_prediction_model(
 
     X_train = X.iloc[:split_index]
     X_test = X.iloc[split_index:]
-
     y_train = y.iloc[:split_index]
     y_test = y.iloc[split_index:]
 
@@ -135,20 +131,10 @@ def train_prediction_model(
     )
 
     model.fit(X_train, y_train)
-
     predictions = model.predict(X_test)
 
-    mae = mean_absolute_error(
-        y_test,
-        predictions
-    )
-
-    rmse = np.sqrt(
-        mean_squared_error(
-            y_test,
-            predictions
-        )
-    )
+    mae = mean_absolute_error(y_test, predictions)
+    rmse = np.sqrt(mean_squared_error(y_test, predictions))
 
     return {
         "status": "success",
@@ -165,6 +151,7 @@ def train_prediction_model(
     }
 
 
+
 def generate_predictions(
     df: pd.DataFrame,
     target: str,
@@ -173,31 +160,34 @@ def generate_predictions(
 ):
     """
     Generate future predictions for a weather variable.
+    Validates dataset, detects repeated predictions.
     """
 
-    valid_data = df.dropna(
-        subset=["timestamp", target]
-    ).copy()
+    if "timestamp" not in df.columns:
+        return {
+            "status": "validation_error",
+            "message": "The 'timestamp' column is required for predictions.",
+            "predictions": []
+        }
 
-    valid_data = valid_data.sort_values(
-        "timestamp"
-    ).reset_index(drop=True)
+    if target not in df.columns:
+        return {
+            "status": "validation_error",
+            "message": f"The target column '{target}' was not found in the dataset.",
+            "predictions": []
+        }
+
+    valid_data = df.dropna(subset=["timestamp", target]).copy()
+    valid_data = valid_data.sort_values("timestamp").reset_index(drop=True)
 
     if len(valid_data) < 10:
         return {
             "status": "insufficient_data",
-            "message": (
-                "At least 10 valid records are required "
-                "for prediction."
-            ),
+            "message": "At least 10 valid records are required for prediction.",
             "predictions": []
         }
 
-    X, y, feature_columns = prepare_features(
-        valid_data,
-        target,
-        lags
-    )
+    X, y, feature_columns = prepare_features(valid_data, target, lags)
 
     if len(X) < 8:
         return {
@@ -215,12 +205,9 @@ def generate_predictions(
     model.fit(X, y)
 
     history = valid_data[target].tolist()
-
     last_timestamp = valid_data["timestamp"].iloc[-1]
 
-    # Determine sampling frequency
     timestamps = valid_data["timestamp"]
-
     if len(timestamps) >= 2:
         frequency = timestamps.iloc[-1] - timestamps.iloc[-2]
     else:
@@ -229,10 +216,7 @@ def generate_predictions(
     predictions = []
 
     for step in range(1, horizon + 1):
-
-        future_timestamp = (
-            last_timestamp + frequency * step
-        )
+        future_timestamp = last_timestamp + frequency * step
 
         feature_data = {
             "hour": future_timestamp.hour,
@@ -240,44 +224,30 @@ def generate_predictions(
             "month": future_timestamp.month
         }
 
-        # Latest lag values
         for lag in range(1, lags + 1):
-
             if len(history) >= lag:
-                feature_data[
-                    f"{target}_lag_{lag}"
-                ] = history[-lag]
-
+                feature_data[f"{target}_lag_{lag}"] = history[-lag]
             else:
-                feature_data[
-                    f"{target}_lag_{lag}"
-                ] = history[0]
+                feature_data[f"{target}_lag_{lag}"] = history[0]
 
-        feature_row = pd.DataFrame(
-            [feature_data]
-        )
+        feature_row = pd.DataFrame([feature_data])
+        feature_row = feature_row[[
+            column for column in feature_columns
+            if column in feature_row.columns
+        ]]
 
-        # Ensure exact feature ordering
-        feature_row = feature_row[
-            [
-                column
-                for column in feature_columns
-                if column in feature_row.columns
-            ]
-        ]
-
-        prediction = float(
-            model.predict(feature_row)[0]
-        )
+        prediction = float(model.predict(feature_row)[0])
 
         predictions.append({
             "timestamp": future_timestamp.isoformat(),
             "value": round(prediction, 3)
         })
 
-        # Feed prediction back into history
-        # so the next prediction can use it.
         history.append(prediction)
+
+    prediction_values = [p["value"] for p in predictions]
+    unique_values = len(set(prediction_values))
+    repeated_count = len(prediction_values) - unique_values
 
     return {
         "status": "success",
@@ -285,8 +255,10 @@ def generate_predictions(
         "model": "RandomForestRegressor",
         "forecast_horizon": horizon,
         "frequency": str(frequency),
-        "predictions": predictions
+        "predictions": predictions,
+        "repeated_predictions_count": repeated_count
     }
+
 
 
 def generate_prediction_report(
@@ -295,6 +267,7 @@ def generate_prediction_report(
 ):
     """
     Generate predictions for all supported weather variables.
+    Returns metrics for each variable.
     """
 
     report = {
@@ -304,17 +277,17 @@ def generate_prediction_report(
     }
 
     for variable in WEATHER_VARIABLES:
-
         if variable not in df.columns:
             continue
 
         report["variables_analyzed"].append(variable)
 
-        result = generate_predictions(
-            df,
-            variable,
-            horizon=horizon
-        )
+        result = generate_predictions(df, variable, horizon=horizon)
+
+        if result["status"] == "success":
+            model_info = train_prediction_model(df, variable)
+            if model_info["status"] == "success":
+                result["metrics"] = model_info["metrics"]
 
         report["results"][variable] = result
 
